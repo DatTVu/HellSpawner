@@ -1,44 +1,41 @@
 package hsapp
 
 import (
-	"fmt"
+	"errors"
 	"image/color"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/OpenDiablo2/HellSpawner/hscommon/hsfiletypes"
+
+	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2fileformats/d2mpq"
 
 	g "github.com/AllenDang/giu"
 	"github.com/AllenDang/giu/imgui"
+
+	"github.com/OpenDiablo2/dialog"
+	"github.com/faiface/beep"
+	"github.com/faiface/beep/speaker"
+	"github.com/go-gl/glfw/v3.3/glfw"
+
 	"github.com/OpenDiablo2/HellSpawner/hscommon"
 	"github.com/OpenDiablo2/HellSpawner/hscommon/hsproject"
 	"github.com/OpenDiablo2/HellSpawner/hsconfig"
 	"github.com/OpenDiablo2/HellSpawner/hswindow/hsdialog/hsaboutdialog"
 	"github.com/OpenDiablo2/HellSpawner/hswindow/hsdialog/hspreferencesdialog"
 	"github.com/OpenDiablo2/HellSpawner/hswindow/hsdialog/hsprojectpropertiesdialog"
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor/hscofeditor"
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor/hsdc6editor"
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor/hsdcceditor"
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor/hspaletteeditor"
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor/hssoundeditor"
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor/hstexteditor"
 	"github.com/OpenDiablo2/HellSpawner/hswindow/hstoolwindow/hsmpqexplorer"
 	"github.com/OpenDiablo2/HellSpawner/hswindow/hstoolwindow/hsprojectexplorer"
-	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2fileformats/d2mpq"
-	"github.com/OpenDiablo2/dialog"
-	"github.com/faiface/beep"
-	"github.com/faiface/beep/speaker"
-	"github.com/go-gl/glfw/v3.3/glfw"
 )
 
 const baseWindowTitle = "HellSpawner"
 
 type App struct {
-	isRunning    bool
-	masterWindow *g.MasterWindow
-	project      *hsproject.Project
-	config       *hsconfig.Config
+	project *hsproject.Project
+	config  *hsconfig.Config
 
 	aboutDialog             *hsaboutdialog.AboutDialog
 	preferencesDialog       *hspreferencesdialog.PreferencesDialog
@@ -47,7 +44,9 @@ type App struct {
 	projectExplorer *hsprojectexplorer.ProjectExplorer
 	mpqExplorer     *hsmpqexplorer.MPQExplorer
 
-	editors []hscommon.EditorWindow
+	editors            []hscommon.EditorWindow
+	editorConstructors map[hsfiletypes.FileType]func(pathEntry *hscommon.PathEntry, data *[]byte) (hscommon.EditorWindow, error)
+	focusedEditor      hscommon.EditorWindow
 
 	fontFixed         imgui.Font
 	fontFixedSmall    imgui.Font
@@ -55,23 +54,16 @@ type App struct {
 	diabloRegularFont imgui.Font
 }
 
+func (a *App) FocusOn(editor hscommon.EditorWindow) {
+	a.focusedEditor = editor
+}
+
 func Create() (*App, error) {
-	result := &App{}
-	result.editors = make([]hscommon.EditorWindow, 0)
-	result.config = hsconfig.Load()
-
-	var err error
-
-	if result.mpqExplorer, err = hsmpqexplorer.Create(result.openEditor, *result.config); err != nil {
-		return nil, err
+	result := &App{
+		editors:            make([]hscommon.EditorWindow, 0),
+		editorConstructors: make(map[hsfiletypes.FileType]func(pathEntry *hscommon.PathEntry, data *[]byte) (hscommon.EditorWindow, error)),
+		config:             hsconfig.Load(),
 	}
-
-	if result.projectExplorer, err = hsprojectexplorer.Create(result.openEditor); err != nil {
-		return nil, err
-	}
-
-	result.projectPropertiesDialog = hsprojectpropertiesdialog.Create(result.onProjectPropertiesChanged)
-	result.preferencesDialog = hspreferencesdialog.Create(result.onPreferencesChanged)
 
 	return result, nil
 }
@@ -85,6 +77,10 @@ func (a *App) Run() {
 		log.Fatal(err)
 	}
 
+	if a.config.OpenMostRecentOnStartup && len(a.config.RecentProjects) > 0 {
+		a.loadProjectFromFile(a.config.RecentProjects[0])
+	}
+
 	dialog.Init()
 	hscommon.ProcessTextureLoadRequests()
 	wnd.Run(a.render)
@@ -96,8 +92,17 @@ func (a *App) render() {
 
 	idx := 0
 	for idx < len(a.editors) {
+		if a.editors[idx].IsFocused() {
+			a.FocusOn(a.editors[idx])
+		}
+
 		if !a.editors[idx].IsVisible() {
 			a.editors[idx].Cleanup()
+
+			if a.focusedEditor == a.editors[idx] {
+				a.focusedEditor = nil
+			}
+
 			a.editors = append(a.editors[:idx], a.editors[idx+1:]...)
 			continue
 		}
@@ -107,85 +112,13 @@ func (a *App) render() {
 	}
 
 	a.projectExplorer.Render(a.project)
-	a.mpqExplorer.Render()
+	a.mpqExplorer.Render(a.project, a.config)
 	a.preferencesDialog.Render()
 	a.aboutDialog.Render()
 	a.projectPropertiesDialog.Render()
 
 	g.Update()
 	hscommon.ResumeLoadingTextures()
-
-}
-
-func (a *App) loadMpq(fileName string) {
-	a.mpqExplorer.AddMPQ(fileName)
-	a.mpqExplorer.Show()
-}
-
-func (a *App) buildViewMenu() g.Layout {
-	result := make([]g.Widget, 0)
-
-	result = append(result, g.Menu("Tool Windows").Layout(g.Layout{
-		g.MenuItem("Project Explorer").Selected(a.projectExplorer.Visible).Enabled(true).OnClick(a.toggleProjectExplorer),
-		g.MenuItem("MPQ Explorer").Selected(a.mpqExplorer.Visible).Enabled(true).OnClick(a.toggleMPQExplorer),
-	}))
-
-	if len(a.editors) == 0 {
-		return result
-	}
-
-	result = append(result, g.Separator())
-
-	for idx := range a.editors {
-		i := idx
-		result = append(result, g.MenuItem(a.editors[idx].GetWindowTitle()).OnClick(a.editors[i].BringToFront))
-	}
-
-	return result
-}
-
-func (a *App) renderMainMenuBar() {
-	projectOpened := a.project != nil
-
-	g.MainMenuBar().Layout(g.Layout{
-		g.Menu("File##MainMenuFile").Layout(g.Layout{
-			g.Menu("New##MainMenuFileNew").Layout(g.Layout{
-				g.MenuItem("Project...##MainMenuFileNewProject").OnClick(a.onNewProjectClicked),
-			}),
-			g.Menu("Open##MainMenuFileOpen").Layout(g.Layout{
-				g.MenuItem("Project...##MainMenuFileOpenProject").OnClick(a.onOpenProjectClicked),
-			}),
-			g.Menu("Open Recent##MainMenuOpenRecent").Layout(g.Layout{
-				g.Custom(func() {
-					if len(a.config.RecentProjects) == 0 {
-						g.MenuItem("No recent projects...##MainMenuOpenRecentItems").Build()
-						return
-					}
-					for idx := range a.config.RecentProjects {
-						projectName := a.config.RecentProjects[idx]
-						g.MenuItem(fmt.Sprintf("%s##MainMenuOpenRecent_%d", projectName, idx)).OnClick(func() {
-							a.loadProjectFromFile(projectName)
-						}).Build()
-					}
-				}),
-			}),
-			g.Separator(),
-			g.MenuItem("Preferences...##MainMenuFilePreferences").OnClick(a.onFilePreferencesClicked),
-			g.Separator(),
-			g.MenuItem("Exit##MainMenuFileExit").OnClick(func() { os.Exit(0) }),
-		}),
-		g.Menu("View##MainMenuView").Layout(a.buildViewMenu()),
-		g.Menu("Project##MainMenuProject").Layout(g.Layout{
-			g.MenuItem("Run in OpenDiablo2##MainMenuProjectRun").Enabled(projectOpened).OnClick(a.onProjectRunClicked),
-			g.Separator(),
-			g.MenuItem("Properties...##MainMenuProjectProperties").Enabled(projectOpened).OnClick(a.onProjectPropertiesClicked),
-			g.Separator(),
-			g.MenuItem("Export MPQ...##MainMenuProjectExport").Enabled(projectOpened).OnClick(a.onProjectExportMPQClicked),
-		}),
-		g.Menu("Help").Layout(g.Layout{
-			g.MenuItem("About HellSpawner...##MainMenuHelpAbout").OnClick(a.onHelpAboutClicked),
-		}),
-	}).Build()
 }
 
 func (a *App) setupFonts() {
@@ -199,159 +132,83 @@ func (a *App) setupFonts() {
 	// rb.BuildRanges(ranges)
 	// imgui.CurrentIO().Fonts().AddFontFromFileTTFV("NotoSans-Regular.ttf", 17, 0, imgui.CurrentIO().Fonts().GlyphRangesJapanese())
 
-	imgui.CurrentIO().Fonts().AddFontFromFileTTF("NotoSans-Regular.ttf", 17)
-	a.fontFixed = imgui.CurrentIO().Fonts().AddFontFromFileTTF("CascadiaCode.ttf", 15)
-	a.fontFixedSmall = imgui.CurrentIO().Fonts().AddFontFromFileTTF("CascadiaCode.ttf", 12)
-	a.diabloRegularFont = imgui.CurrentIO().Fonts().AddFontFromFileTTF("DiabloRegular.ttf", 15)
-	a.diabloBoldFont = imgui.CurrentIO().Fonts().AddFontFromFileTTF("DiabloBold.ttf", 30)
+	imgui.CurrentIO().Fonts().AddFontFromFileTTF("hsassets/fonts/NotoSans-Regular.ttf", 17)
+	a.fontFixed = imgui.CurrentIO().Fonts().AddFontFromFileTTF("hsassets/fonts/CascadiaCode.ttf", 15)
+	a.fontFixedSmall = imgui.CurrentIO().Fonts().AddFontFromFileTTF("hsassets/fonts/CascadiaCode.ttf", 12)
+	a.diabloRegularFont = imgui.CurrentIO().Fonts().AddFontFromFileTTF("hsassets/fonts/DiabloRegular.ttf", 15)
+	a.diabloBoldFont = imgui.CurrentIO().Fonts().AddFontFromFileTTF("hsassets/fonts/DiabloBold.ttf", 30)
 	imgui.CurrentStyle().ScaleAllSizes(1.0)
 
-	var err error
-	if a.aboutDialog, err = hsaboutdialog.Create(a.diabloRegularFont, a.diabloBoldFont, a.fontFixedSmall); err != nil {
+	if err := a.setup(); err != nil {
 		log.Fatal(err)
 	}
 }
 
+func (a *App) GetFileBytes(pathEntry *hscommon.PathEntry) ([]byte, error) {
+	if pathEntry.Source == hscommon.PathEntrySourceProject {
+		if _, err := os.Stat(pathEntry.FullPath); os.IsNotExist(err) {
+			return nil, err
+		}
+
+		return ioutil.ReadFile(pathEntry.FullPath)
+	}
+
+	mpq, err := d2mpq.FromFile(pathEntry.MPQFile)
+	if err != nil {
+		return nil, err
+	}
+
+	if mpq.Contains(pathEntry.FullPath) {
+		return mpq.ReadFile(pathEntry.FullPath)
+	}
+
+	return nil, errors.New("could not locate file in mpq")
+}
+
 func (a *App) openEditor(path *hscommon.PathEntry) {
+	uniqueId := path.GetUniqueId()
 	for idx := range a.editors {
-		if a.editors[idx].GetId() == path.FullPath {
+		if a.editors[idx].GetId() == uniqueId {
 			a.editors[idx].BringToFront()
 			return
 		}
 	}
 
-	ext := strings.ToLower(path.FullPath[len(path.FullPath)-4:])
-	parts := strings.Split(path.FullPath, "|")
-
-	// Temporary fix until we get mpq/project loading more sane
-	if len(parts) == 1 {
-		return
-	}
-
-	mpqFile := parts[0]
-	filePath := cleanMpqPathName(parts[1])
-	mpq, err := d2mpq.Load(mpqFile)
-
+	data, err := a.GetFileBytes(path)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	switch ext {
-	case ".txt":
-		text, err := mpq.ReadTextFile(filePath)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		editor, err := hstexteditor.Create(path.Name, text, a.fontFixed)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		a.editors = append(a.editors, editor)
-		editor.SetId(path.FullPath)
-		editor.Show()
-	case ".wav":
-		audioStream, err := mpq.ReadFileStream(filePath)
-
-		editor, err := hssoundeditor.Create(path.Name, audioStream)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		a.editors = append(a.editors, editor)
-		editor.SetId(path.FullPath)
-		editor.Show()
-	case ".dat":
-		data, err := mpq.ReadFile(filePath)
-		if err != nil {
-			return
-		}
-
-		editor, err := hspaletteeditor.Create(path.Name, path.FullPath, data)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		a.editors = append(a.editors, editor)
-		editor.SetId(path.FullPath)
-
-		editor.Show()
-	case ".dc6":
-		data, err := mpq.ReadFile(filePath)
-		if err != nil {
-			return
-		}
-
-		editor, err := hsdc6editor.Create(path.Name, path.FullPath, data)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		a.editors = append(a.editors, editor)
-		editor.SetId(path.FullPath)
-
-		editor.Show()
-	case ".dcc":
-		data, err := mpq.ReadFile(filePath)
-		if err != nil {
-			return
-		}
-
-		editor, err := hsdcceditor.Create(path.Name, path.FullPath, data)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		a.editors = append(a.editors, editor)
-		editor.SetId(path.FullPath)
-
-		editor.Show()
-	case ".cof":
-		data, err := mpq.ReadFile(filePath)
-		if err != nil {
-			return
-		}
-
-		editor, err := hscofeditor.Create(path.Name, path.FullPath, data)
-
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		a.editors = append(a.editors, editor)
-		editor.SetId(path.FullPath)
-
-		editor.Show()
-	}
-}
-
-func (a *App) onNewProjectClicked() {
-	file, err := dialog.File().Filter("HellSpawner Project", "hsp").Save()
-	if err != nil || len(file) == 0 {
+		dialog.Message("Could not load file!").Error()
 		return
 	}
-	var project *hsproject.Project
-	if project, err = hsproject.CreateNew(file); err != nil {
-		return
-	}
-	a.project = project
-	a.config.AddToRecentProjects(file)
-	a.updateWindowTitle()
-}
 
-func (a *App) onOpenProjectClicked() {
-	file, err := dialog.File().Filter("HellSpawner Project", "hsp").Load()
-	if err != nil || len(file) == 0 {
+	fileType, err := hsfiletypes.GetFileTypeFromExtension(filepath.Ext(path.FullPath), &data)
+	if err != nil {
+		dialog.Message("No file type is defined for this extension!").Error()
 		return
 	}
-	a.loadProjectFromFile(file)
+
+	if a.editorConstructors[fileType] == nil {
+		dialog.Message("No editor is defined for this file type!").Error()
+	}
+
+	go func() {
+		var editor hscommon.EditorWindow
+
+		var err error
+
+		editorMaker, editorFound := a.editorConstructors[fileType]
+		if editorFound {
+			editor, err = editorMaker(path, &data)
+		}
+
+		if !editorFound || err != nil {
+			dialog.Message("Error creating editor!").Error()
+			return
+		}
+
+		a.editors = append(a.editors, editor)
+		a.focusedEditor = editor
+		editor.Show()
+	}()
 }
 
 func (a *App) loadProjectFromFile(file string) {
@@ -375,32 +232,12 @@ func (a *App) loadProjectFromFile(file string) {
 	a.projectExplorer.Show()
 }
 
-func (a *App) onProjectPropertiesClicked() {
-	a.projectPropertiesDialog.Show(a.project, a.config)
-}
-
 func (a *App) updateWindowTitle() {
 	if a.project == nil {
 		glfw.GetCurrentContext().SetTitle(baseWindowTitle)
 		return
 	}
 	glfw.GetCurrentContext().SetTitle(baseWindowTitle + " - " + a.project.ProjectName)
-}
-
-func (a *App) onFilePreferencesClicked() {
-	a.preferencesDialog.Show(a.config)
-}
-
-func (a *App) onHelpAboutClicked() {
-	a.aboutDialog.Show()
-}
-
-func (a *App) onProjectRunClicked() {
-
-}
-
-func (a *App) onProjectExportMPQClicked() {
-
 }
 
 func (a *App) toggleMPQExplorer() {
@@ -422,30 +259,20 @@ func (a *App) onPreferencesChanged(config hsconfig.Config) {
 		log.Fatal(err)
 	}
 
-	// TODO: This will crash if a path is selected that does not have the aux MPQs for the project
-
 	if a.project != nil {
 		a.reloadAuxiliaryMPQs()
 	}
 }
 
 func (a *App) reloadAuxiliaryMPQs() {
+	a.project.ReloadAuxiliaryMPQs(a.config)
 	a.mpqExplorer.Reset()
-	for idx := range a.project.AuxiliaryMPQs {
-		a.mpqExplorer.AddMPQ(filepath.Join(a.config.AuxiliaryMpqPath, a.project.AuxiliaryMPQs[idx]))
-	}
 }
 
 func (a *App) toggleProjectExplorer() {
 	a.projectExplorer.ToggleVisibility()
 }
 
-func cleanMpqPathName(name string) string {
-	name = strings.ReplaceAll(name, "/", "\\")
-
-	if string(name[0]) == "\\" {
-		name = name[1:]
-	}
-
-	return name
+func (a *App) SetFocusedEditor(e hscommon.EditorWindow) {
+	a.focusedEditor = e
 }

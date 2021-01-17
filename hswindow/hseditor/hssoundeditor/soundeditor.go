@@ -1,8 +1,12 @@
 package hssoundeditor
 
 import (
+	"bytes"
 	"fmt"
 	"log"
+	"path/filepath"
+
+	"github.com/OpenDiablo2/HellSpawner/hscommon"
 
 	"github.com/faiface/beep"
 	"github.com/faiface/beep/speaker"
@@ -12,7 +16,6 @@ import (
 
 	g "github.com/AllenDang/giu"
 	"github.com/AllenDang/giu/imgui"
-	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2interface"
 )
 
 type SoundEditor struct {
@@ -24,15 +27,8 @@ type SoundEditor struct {
 	file     string
 }
 
-func (s *SoundEditor) Cleanup() {
-	speaker.Lock()
-	s.control.Paused = true
-	s.streamer.Close()
-	speaker.Unlock()
-}
-
-func Create(file string, audioStream d2interface.DataStream) (*SoundEditor, error) {
-	streamer, format, err := wav.Decode(audioStream)
+func Create(pathEntry *hscommon.PathEntry, data *[]byte) (hscommon.EditorWindow, error) {
+	streamer, format, err := wav.Decode(bytes.NewReader(*data))
 
 	if err != nil {
 		log.Fatal(err)
@@ -40,15 +36,17 @@ func Create(file string, audioStream d2interface.DataStream) (*SoundEditor, erro
 
 	control := &beep.Ctrl{
 		Streamer: beep.Loop(-1, streamer),
-		Paused:   true,
+		Paused:   false,
 	}
 
 	result := &SoundEditor{
-		file:     file,
+		file:     filepath.Base(pathEntry.FullPath),
 		streamer: streamer,
 		control:  control,
 		format:   format,
 	}
+
+	result.Path = pathEntry
 
 	speaker.Play(result.control)
 
@@ -69,18 +67,25 @@ func (s *SoundEditor) Render() {
 	secondsTotal := s.streamer.Len() / 22050
 
 	g.Window(s.GetWindowTitle()).IsOpen(&s.Visible).Flags(g.WindowFlagsNoResize).Pos(50, 50).Size(300, 100).Layout(g.Layout{
-		g.ProgressBar(float32(s.streamer.Position())/float32(s.streamer.Len())).Size(0, 24).
+		g.ProgressBar(float32(s.streamer.Position())/float32(s.streamer.Len())).Size(-1, 24).
 			Overlay(fmt.Sprintf("%d:%02d / %d:%02d", secondsCurrent/60, secondsCurrent%60, secondsTotal/60, secondsTotal%60)),
 		g.Separator(),
 		g.Line(
 			g.Button("Play").OnClick(s.play),
 			g.Button("Stop").OnClick(s.stop),
 		),
+		g.Custom(func() {
+			s.Focused = imgui.IsWindowFocused(0)
+		}),
 	})
 }
 
-func (s *SoundEditor) GetWindowTitle() string {
-	return s.file + "##" + s.GetId()
+func (s *SoundEditor) Cleanup() {
+	speaker.Lock()
+	s.control.Paused = true
+	s.streamer.Close()
+	s.Editor.Cleanup()
+	speaker.Unlock()
 }
 
 func (s *SoundEditor) play() {
@@ -91,6 +96,7 @@ func (s *SoundEditor) play() {
 
 func (s *SoundEditor) stop() {
 	speaker.Lock()
+
 	if s.control.Paused {
 		if err := s.streamer.Seek(0); err != nil {
 			log.Fatal(err)
@@ -98,4 +104,20 @@ func (s *SoundEditor) stop() {
 	}
 	s.control.Paused = true
 	speaker.Unlock()
+}
+
+func (e *SoundEditor) UpdateMainMenuLayout(l *g.Layout) {
+	m := g.Menu("Sound Editor").Layout(g.Layout{
+		g.MenuItem("Add to project").OnClick(func() {}),
+		g.MenuItem("Remove from project").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Import from file...").OnClick(func() {}),
+		g.MenuItem("Export to file...").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Close").OnClick(func() {
+			e.Visible = false
+		}),
+	})
+
+	*l = append(*l, m)
 }

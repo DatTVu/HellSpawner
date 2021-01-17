@@ -1,40 +1,36 @@
 package hspaletteeditor
 
 import (
+	"github.com/OpenDiablo2/HellSpawner/hscommon"
 	"github.com/OpenDiablo2/HellSpawner/hswidget"
 
 	g "github.com/AllenDang/giu"
 	"github.com/AllenDang/giu/imgui"
 
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor"
 	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2fileformats/d2dat"
 	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2interface"
+
+	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor"
 )
 
-func Create(path string, fullPath string, data []byte) (*PaletteEditor, error) {
-	palette, err := d2dat.Load(data)
+type PaletteEditor struct {
+	hseditor.Editor
+	palette d2interface.Palette
+}
+
+func Create(pathEntry *hscommon.PathEntry, data *[]byte) (hscommon.EditorWindow, error) {
+	palette, err := d2dat.Load(*data)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &PaletteEditor{
-		path:     path,
-		fullPath: fullPath,
-		palette:  palette,
+		palette: palette,
 	}
 
+	result.Path = pathEntry
+
 	return result, nil
-}
-
-type PaletteEditor struct {
-	hseditor.Editor
-	palette  d2interface.Palette
-	path     string
-	fullPath string
-}
-
-func (e *PaletteEditor) GetWindowTitle() string {
-	return e.path + "##" + e.GetId()
 }
 
 func (e *PaletteEditor) Render() {
@@ -48,10 +44,25 @@ func (e *PaletteEditor) Render() {
 	}
 
 	g.Window(e.GetWindowTitle()).IsOpen(&e.Visible).Flags(g.WindowFlagsAlwaysAutoResize).Pos(360, 30).Layout(g.Layout{
-		hswidget.PaletteGrid(e.fullPath, e.palette.GetColors()),
+		hswidget.PaletteGrid(e.GetId()+"_grid", e.palette.GetColors()),
+		g.Custom(func() {
+			e.Focused = imgui.IsWindowFocused(0)
+		}),
 	})
 }
 
-func (e *PaletteEditor) Cleanup() {
-	e.Visible = false
+func (e *PaletteEditor) UpdateMainMenuLayout(l *g.Layout) {
+	m := g.Menu("Palette Editor").Layout(g.Layout{
+		g.MenuItem("Add to project").OnClick(func() {}),
+		g.MenuItem("Remove from project").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Import from file...").OnClick(func() {}),
+		g.MenuItem("Export to file...").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Close").OnClick(func() {
+			e.Visible = false
+		}),
+	})
+
+	*l = append(*l, m)
 }

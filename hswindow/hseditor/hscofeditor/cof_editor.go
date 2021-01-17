@@ -3,40 +3,32 @@ package hscofeditor
 import (
 	g "github.com/AllenDang/giu"
 	"github.com/AllenDang/giu/imgui"
+	"github.com/OpenDiablo2/HellSpawner/hscommon"
 	"github.com/OpenDiablo2/HellSpawner/hswidget"
 
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor"
 	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2fileformats/d2cof"
+
+	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor"
 )
 
-func Create(path string, fullPath string, data []byte) (*COFEditor, error) {
-	cof, err := d2cof.Load(data)
+func Create(pathEntry *hscommon.PathEntry, data *[]byte) (hscommon.EditorWindow, error) {
+	cof, err := d2cof.Load(*data)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &COFEditor{
-		path:     path,
-		fullPath: fullPath,
-		cof:      cof,
+		cof: cof,
 	}
+
+	result.Path = pathEntry
 
 	return result, nil
 }
 
 type COFEditor struct {
 	hseditor.Editor
-	path     string
-	fullPath string
-	cof      *d2cof.COF
-}
-
-func (e *COFEditor) GetWindowTitle() string {
-	return e.path + "##" + e.GetId()
-}
-
-func (e *COFEditor) Cleanup() {
-	e.Visible = false
+	cof *d2cof.COF
 }
 
 func (e *COFEditor) Render() {
@@ -50,6 +42,25 @@ func (e *COFEditor) Render() {
 	}
 
 	g.Window(e.GetWindowTitle()).IsOpen(&e.Visible).Flags(g.WindowFlagsAlwaysAutoResize).Layout(g.Layout{
-		hswidget.COFViewer(e.fullPath, e.cof),
+		hswidget.COFViewer(e.Path.GetUniqueId(), e.cof),
+		g.Custom(func() {
+			e.Focused = imgui.IsWindowFocused(0)
+		}),
 	})
+}
+
+func (e *COFEditor) UpdateMainMenuLayout(l *g.Layout) {
+	m := g.Menu("COF Editor").Layout(g.Layout{
+		g.MenuItem("Add to project").OnClick(func() {}),
+		g.MenuItem("Remove from project").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Import from file...").OnClick(func() {}),
+		g.MenuItem("Export to file...").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Close").OnClick(func() {
+			e.Visible = false
+		}),
+	})
+
+	*l = append(*l, m)
 }

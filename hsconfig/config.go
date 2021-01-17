@@ -12,9 +12,10 @@ import (
 )
 
 type Config struct {
-	RecentProjects   []string
-	AuxiliaryMpqPath string
-	ExternalListfile string
+	RecentProjects          []string
+	AuxiliaryMpqPath        string
+	ExternalListfile        string
+	OpenMostRecentOnStartup bool
 }
 
 func getConfigPath() string {
@@ -27,9 +28,14 @@ func getConfigPath() string {
 
 func generateDefaultConfig() *Config {
 	result := &Config{
-		RecentProjects: []string{},
+		RecentProjects:          []string{},
+		OpenMostRecentOnStartup: true,
 	}
-	result.Save()
+
+	err := result.Save()
+	if err != nil {
+		log.Fatalf("filed to save config: %s", err)
+	}
 
 	return result
 }
@@ -71,28 +77,35 @@ func (c *Config) Save() error {
 }
 
 func (c *Config) AddToRecentProjects(filePath string) {
+	found := false
 	for idx := range c.RecentProjects {
 		if c.RecentProjects[idx] == filePath {
+			found = true
 			if idx != 0 {
 				old := c.RecentProjects[0]
 				c.RecentProjects[0] = filePath
 				c.RecentProjects[idx] = old
 			}
-			return
 		}
 	}
 
-	recent := []string{filePath}
-	for idx := range c.RecentProjects {
-		if idx == 5 {
-			break
+	if !found {
+		recent := []string{filePath}
+		for idx := range c.RecentProjects {
+			if idx == 5 {
+				break
+			}
+
+			recent = append(recent, c.RecentProjects[idx])
 		}
 
-		recent = append(recent, c.RecentProjects[idx])
+		c.RecentProjects = recent
 	}
 
-	c.RecentProjects = recent
-	c.Save()
+	err := c.Save()
+	if err != nil {
+		log.Fatalf("failed to save config: %s", err)
+	}
 }
 
 func (c *Config) GetAuxMPQs() []string {
@@ -102,10 +115,11 @@ func (c *Config) GetAuxMPQs() []string {
 
 	result := make([]string, 0)
 
-	filepath.Walk(c.AuxiliaryMpqPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(c.AuxiliaryMpqPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
+
 		ext := strings.ToLower(filepath.Ext(path))
 		if ext == ".mpq" {
 			result = append(result, path)
@@ -113,6 +127,9 @@ func (c *Config) GetAuxMPQs() []string {
 
 		return nil
 	})
+	if err != nil {
+		log.Printf("failed to walk path for aux MPQs %s: %s", c.AuxiliaryMpqPath, err)
+	}
 
 	return result
 }

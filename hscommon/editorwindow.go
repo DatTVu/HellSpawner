@@ -2,11 +2,13 @@ package hscommon
 
 type EditorWindow interface {
 	Renderable
+	MainMenuUpdater
+	FocusController
 
 	GetWindowTitle() string
 	Show()
 	IsVisible() bool
-	SetId(id string)
+	IsFocused() bool
 	GetId() string
 	BringToFront()
 }

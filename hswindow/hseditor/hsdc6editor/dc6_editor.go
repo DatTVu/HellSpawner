@@ -3,44 +3,33 @@ package hsdc6editor
 import (
 	g "github.com/AllenDang/giu"
 	"github.com/AllenDang/giu/imgui"
+
+	"github.com/OpenDiablo2/HellSpawner/hscommon"
 	"github.com/OpenDiablo2/HellSpawner/hswidget"
 
-	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor"
 	"github.com/OpenDiablo2/OpenDiablo2/d2common/d2fileformats/d2dc6"
+
+	"github.com/OpenDiablo2/HellSpawner/hswindow/hseditor"
 )
 
-func Create(path string, fullPath string, data []byte) (*DC6Editor, error) {
-	dc6, err := d2dc6.Load(data)
+func Create(pathEntry *hscommon.PathEntry, data *[]byte) (hscommon.EditorWindow, error) {
+	dc6, err := d2dc6.Load(*data)
 	if err != nil {
 		return nil, err
 	}
 
-	//numFrames := dc6.Directions * dc6.FramesPerDirection
-
 	result := &DC6Editor{
-		path:     path,
-		fullPath: fullPath,
-		dc6:      dc6,
-		//decodedFrames: make([][]byte, numFrames),
-		//textures:      make([]*g.Texture, numFrames),
+		dc6: dc6,
 	}
+
+	result.Path = pathEntry
 
 	return result, nil
 }
 
 type DC6Editor struct {
 	hseditor.Editor
-	path     string
-	fullPath string
-	dc6      *d2dc6.DC6
-}
-
-func (e *DC6Editor) GetWindowTitle() string {
-	return e.path + "##" + e.GetId()
-}
-
-func (e *DC6Editor) Cleanup() {
-	e.Visible = false
+	dc6 *d2dc6.DC6
 }
 
 func (e *DC6Editor) Render() {
@@ -54,7 +43,25 @@ func (e *DC6Editor) Render() {
 	}
 
 	g.Window(e.GetWindowTitle()).IsOpen(&e.Visible).Flags(g.WindowFlagsAlwaysAutoResize).Layout(g.Layout{
-		hswidget.DC6Viewer(e.fullPath, e.dc6),
+		hswidget.DC6Viewer(e.Path.GetUniqueId(), e.dc6),
+		g.Custom(func() {
+			e.Focused = imgui.IsWindowFocused(0)
+		}),
+	})
+}
+
+func (e *DC6Editor) UpdateMainMenuLayout(l *g.Layout) {
+	m := g.Menu("DC6 Editor").Layout(g.Layout{
+		g.MenuItem("Add to project").OnClick(func() {}),
+		g.MenuItem("Remove from project").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Import from file...").OnClick(func() {}),
+		g.MenuItem("Export to file...").OnClick(func() {}),
+		g.Separator(),
+		g.MenuItem("Close").OnClick(func() {
+			e.Visible = false
+		}),
 	})
 
+	*l = append(*l, m)
 }

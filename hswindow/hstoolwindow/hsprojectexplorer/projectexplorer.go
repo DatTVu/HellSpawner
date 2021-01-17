@@ -13,6 +13,7 @@ import (
 	"github.com/AllenDang/giu/imgui"
 
 	g "github.com/AllenDang/giu"
+
 	"github.com/OpenDiablo2/HellSpawner/hscommon"
 	"github.com/OpenDiablo2/HellSpawner/hscommon/hsproject"
 	"github.com/OpenDiablo2/HellSpawner/hswindow/hstoolwindow"
@@ -133,10 +134,8 @@ func (m *ProjectExplorer) createFileTreeItem(pathEntry *hscommon.PathEntry, proj
 			}),
 		}
 	} else {
-		layout = append(layout, g.Selectable(pathEntry.Name+id).Flags(g.SelectableFlagsAllowDoubleClick).OnClick(func() {
-			if imgui.IsMouseDoubleClicked(int(g.MouseButtonLeft)) {
-				m.fileSelectedCallback(pathEntry)
-			}
+		layout = append(layout, g.Selectable(pathEntry.Name+id).OnClick(func() {
+			m.fileSelectedCallback(pathEntry)
 		}))
 	}
 
